@@ -142,7 +142,7 @@ def get_answer(vector_store, qa_pipeline, question):
 
 # Streamlit UI
 st.set_page_config(page_title="Multi-PDF Analyzer", layout="wide")
-st.title("📄 Docai")
+st.title("📄 DocAI")
 st.subheader("Upload 1-5 PDF files for AI-powered Q&A")
 
 # File upload
@@ -158,29 +158,47 @@ if uploaded_files:
         uploaded_files = uploaded_files[:5]
     
     # Process PDFs
-    with st.spinner("Analyzing documents..."):
+    with st.spinner("Analyzing documents (this may take a minute)..."):
+        start_time = time.time()
+        
         # Extract and split text
         raw_text = extract_text(uploaded_files)
         text_chunks = split_text(raw_text)
         
+        # Handle empty text case
+        if not text_chunks:
+            st.error("Failed to extract text from PDFs. Please try different files.")
+            st.stop()
+        
         # Create vector store
-        vector_store = create_vector_store(text_chunks)
+        embeddings = load_embedding_model()
+        vector_store = create_vector_store(embeddings, text_chunks)
         
         # Load QA model
         qa_pipeline = load_qa_model()
-    
-    st.success(f"Processed {len(uploaded_files)} PDF(s) with {len(text_chunks)} text chunks")
-    
+        
+        st.success(f"Processed {len(uploaded_files)} PDF(s) in {time.time()-start_time:.1f}s | {len(text_chunks)} chunks")
+
     # Q&A interface
+    st.divider()
     question = st.text_input("Ask about your documents:", placeholder="Enter your question here...")
     
     if question:
         with st.spinner("Searching for answers..."):
-            try:
-                answer = get_answer(vector_store, qa_pipeline, question)
-                st.subheader("Answer:")
-                st.info(answer)
-            except Exception as e:
-                st.error(f"Error generating answer: {str(e)}")
+            answer = get_answer(vector_store, qa_pipeline, question)
+            st.subheader("Answer:")
+            st.info(answer)
+            
+            # Word count indicator
+            word_count = len(answer.split())
+            st.caption(f"Answer length: {word_count} words (max {MAX_ANSWER_WORDS})")
+            
+            # Debug information (collapsible)
+            with st.expander("Debug information"):
+                st.write("**Retrieved context chunks:**")
+                docs = vector_store.similarity_search(question, k=3)
+                for i, doc in enumerate(docs):
+                    st.write(f"**Chunk {i+1}:**")
+                    st.text(doc.page_content[:500] + ("..." if len(doc.page_content) > 500 else ""))
 else:
     st.info("Please upload PDF documents to get started")

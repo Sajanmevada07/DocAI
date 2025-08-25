@@ -87,19 +87,20 @@ def create_vector_store(_embeddings, text_chunks):
         return None
     return FAISS.from_texts(text_chunks, _embeddings)
 
+@st.cache_resource(show_spinner=False)
 def load_qa_model():
-    """Load Hugging Face QA model optimized for CPU"""
+    """Load QA model optimized for CPU with version compatibility"""
     tokenizer = AutoTokenizer.from_pretrained(QA_MODEL)
     model = AutoModelForQuestionAnswering.from_pretrained(QA_MODEL)
     
-    qa_pipeline = pipeline( 
-        "question-answering",
+    # Create and return pipeline directly (without LangChain wrapper)
+    return transformers.pipeline(
+        task="question-answering",
         model=model,
         tokenizer=tokenizer,
-        device=-1,  # Force CPU usage
-        max_length=MAX_CONTEXT_LENGTH
-        )
-    return HuggingFacePipeline(pipeline=qa_pipeline)
+        device=-1,  # Force CPU
+        max_seq_len=MAX_CONTEXT_LENGTH
+    )
 
 def get_answer(vector_store, qa_pipeline, question):
     """Retrieve context and generate answer"""

@@ -1,32 +1,68 @@
 import streamlit as st
-import pdfplumber
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import HuggingFacePipeline
-from transformers import pipeline, AutoTokenizer, AutoModelForQuestionAnswering
-import torch
+from langchain_huggingface import HuggingFacePipeline
+from transformers import AutoTokenizer, AutoModelForQuestionAnswering
+import time
+import os
+import logging
+from transformers.utils import logging as transformers_logging
+import transformers
+
+# Suppress unnecessary warnings
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+transformers_logging.set_verbosity_error()
+logging.getLogger("langchain").setLevel(logging.ERROR)
 
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 QA_MODEL = "deepset/bert-base-cased-squad2"
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
-MAX_CONTEXT_LENGTH = 512
+CHUNK_SIZE = 800  # Reduced for CPU efficiency
+CHUNK_OVERLAP = 100  # Reduced overlap
+MAX_CONTEXT_LENGTH = 384  # Reduced for CPU
+MAX_ANSWER_WORDS = 150
 
 
+def limit_answer_length(answer, max_words=MAX_ANSWER_WORDS):
+    """Truncate answer to a maximum number of words while preserving meaning"""
+    if not isinstance(answer, str) or not answer.strip():
+        return answer
+    
+    words = answer.split()
+    if len(words) <= max_words:
+        return answer
+    
+    # Find a natural truncation point near the word limit
+    truncated = words[:max_words]
+    # Add ellipsis only if we're truncating mid-sentence
+    return ' '.join(truncated) + ('...' if not answer.endswith('.') else '')
+
+
+
+@st.cache_data(show_spinner=False)
 def extract_text(pdf_files):
-    """Extract text from multiple PDFs"""
+    """Extract text from PDF files with error handling"""
     all_text = ""
     for pdf_file in pdf_files:
-        with pdfplumber.open(pdf_file) as pdf:
-            for page in pdf.pages:
-                all_text += page.extract_text() + "\n"
+        try:
+            reader = PdfReader(pdf_file)
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    all_text += text + "\n"
+        except Exception as e:
+            st.error(f"Error processing {pdf_file.name}: {str(e)}")
     return all_text
 
+
+@st.cache_data(show_spinner=False)
 def split_text(text):
-    """Split text into manageable chunks"""
+    """Split text into chunks with validation"""
+    if not text.strip():
+        return []
+    
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
@@ -35,10 +71,21 @@ def split_text(text):
     return text_splitter.split_text(text)
 
 
-def create_vector_store(text_chunks):
-    """Create FAISS vector store from text chunks"""
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
-    return FAISS.from_texts(text_chunks, embeddings)
+
+@st.cache_resource(show_spinner=False)
+def load_embedding_model():
+    """Load embedding model with CPU enforcement"""
+    return HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={'device': 'cpu'}
+    )
+
+@st.cache_resource(show_spinner=False)
+def create_vector_store(_embeddings, text_chunks):
+    """Create vector store with cache"""
+    if not text_chunks:
+        return None
+    return FAISS.from_texts(text_chunks, _embeddings)
 
 def load_qa_model():
     """Load Hugging Face QA model optimized for CPU"""

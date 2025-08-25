@@ -103,16 +103,42 @@ def load_qa_model():
     )
 
 def get_answer(vector_store, qa_pipeline, question):
-    """Retrieve context and generate answer"""
-    # Retrieve relevant chunks
-    docs = vector_store.similarity_search(question, k=3)
-    context = " ".join([doc.page_content for doc in docs])
+    """Answer retrieval with concise output"""
+    try:
+        # Retrieve multiple relevant chunks
+        docs = vector_store.similarity_search(question, k=3)
+        if not docs:
+            return "No relevant context found"
+        
+        # Combine context from multiple chunks
+        context = "\n".join([doc.page_content for doc in docs])
+        context = context[:5000]  # Safe limit
+        
+        # Get answer
+        result = qa_pipeline(question=question, context=context)
+        
+        # Format answer concisely
+        answer_text = result["answer"].strip()
+        
+        # If low confidence, try to find any relevant answer
+        if result["score"] < 0.01:
+            # Try each chunk individually
+            for doc in docs:
+                chunk_result = qa_pipeline(question=question, context=doc.page_content)
+                if chunk_result["score"] > 0.01:
+                    answer_text = chunk_result["answer"].strip()
+                    break
+            
+            # Still no good answer? Return the best we have
+            if result["score"] > 0.001 and not answer_text:
+                answer_text = result["answer"].strip()
+        
+        # Limit answer length
+        return limit_answer_length(answer_text) if answer_text else "I couldn't find a clear answer."
     
-    # Generate answer
-    response = qa_pipeline.invoke(
-        input={"question": question, "context": context}
-    )
-    return response["answer"]
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 
 # Streamlit UI
 st.set_page_config(page_title="Multi-PDF Analyzer", layout="wide")
